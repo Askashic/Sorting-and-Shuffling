@@ -1,2 +1,2 @@
 # Sorting and Shuffling
-Here contains all the code used in the project.
+Here contains all the codes used in the project.
