@@ -1,2 +1,2 @@
-# Fisher-Yates
-A easy example of permutation
+# Sorting and Shuffling
+Here contains all the code used in the project.
