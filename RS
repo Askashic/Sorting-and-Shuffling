@@ -112,4 +112,5 @@ void RS(int *c, int l) {
 
     // Release the memory allocated to the bit array
     free(Bit);
+
 }
