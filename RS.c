@@ -114,3 +114,4 @@ void RS(int *c, int l) {
     free(Bit);
 
 }
+
