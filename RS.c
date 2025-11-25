@@ -44,6 +44,9 @@ void printArray(int *arr, int l, const char *name) {
 // RS function
 void RS(int *c, int l) {
 
+    // Make sure the length is correct
+    if (l <= 0) return;
+    
     // Case 1：The array' s length is 1
     if(l == 1) {
         return; // Just return the original one
@@ -114,4 +117,5 @@ void RS(int *c, int l) {
     free(Bit);
 
 }
+
 
