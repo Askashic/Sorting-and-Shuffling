@@ -21,80 +21,32 @@ void FY( int c[], int n) {
 }
 
 // Rao-Sandelius
-void RS(int *c, int l) {
+void Recursive(int c[], int left, int right) {
+    if (left >= right) return; // When length <= 1, remain the same
 
-    if (l <= 0) return;
+    int p = left+rand()%(right-left+1); // Choose a random element to swap with the 1st one
+    swap(&c[p], &c[left]);
 
-    // Case 1：The array' s length is 1
-    if(l == 1) {
-        return; // Just return the original one
-    }
+    int i = left+1; // Start with the second element
+    int j = right;
 
-    // Case 2：The length is 2
-    if(l == 2) {
-        int bit = rand() % 2;  // Generate a rand bit
-
-        if(bit == 0) { // If rand bit is 0, return the original one
-            return;
-        } else if(bit == 1) {
-            swap(&c[0], &c[1]);  // If rand bit is 1, swap the 2 elements
-            return;
+    while (i <= j) {
+        if (rand()%2 == 0) { // Keep the 0-group in front of the 1-group
+            i++;
+        } else {
+            swap(&c[i], &c[j]);
+            j--;
         }
     }
 
-    // Case 3: The length > 2
-    // Allocate memory for the bit array
-    int *Bit = (int*)malloc(l * sizeof(int));
+    swap(&c[left], &c[j]);
 
-    // Initialise the bit array
-    for(int i = 0; i < l; i++) {
-        Bit[i] = 0;
-    }
+    Recursive(c, left, j - 1);
+    Recursive(c, j + 1, right);
+}
 
-    // The first element is randomly generated as either 0 or 1
-    Bit[0] = rand() % 2;
-
-    int zero_count = 1;  // Indexing starting from the first element
-
-    // Main loop (starting from the second element)
-    for(int i = 1; i < l; i++) {
-        int bit = rand() % 2;  // Generate a random bit
-        Bit[i] = bit;
-
-        // (0, 0)
-        if(Bit[i-1] == 0 && Bit[i] == 0) {
-            zero_count = zero_count + 1;
-        }
-
-        // (0, 1)
-        if(Bit[i-1] == 0 && Bit[i] == 1) {
-            zero_count = zero_count + 1;
-        }
-
-        // (1, 0)
-        if(Bit[i-1] == 1 && Bit[i] == 0) {
-
-            int swap_index = zero_count - 1;
-
-            // Swap Bit[i] and Bit[zero_count-1]
-            swap(&Bit[i], &Bit[zero_count - 1]);
-
-            // Swap c[i] and c[zero_count-1]
-            swap(&c[i], &c[zero_count - 1]);
-
-            zero_count = zero_count + 1;
-        }
-    }
-
-    // Repeat the above steps until length = 1 or 2
-    // 0-group: 1:zero_count-1
-    RS(c, zero_count-1 );
-
-    // 1-group: = zero_count:l
-    RS(c+zero_count-1, l-zero_count+1);
-
-    // Release the memory allocated to the bit array
-    free(Bit);
+void RS(int c[], int n) {
+    Recursive(c, 0, n - 1);
 }
 
 // time count
@@ -113,7 +65,7 @@ double get_time() {
 #endif
 
 // Testing algorithm performance (averaging multiple runs)
-double test_algorithm_performance_high_precision(void (*func)(int[], int), int arr[], int n, int iterations) {
+double test_in_high_precision(void (*func)(int[], int), int arr[], int n, int iterations) {
     int* test_arr = (int*)malloc(n*sizeof(int));
     if (test_arr == NULL) {
         printf("error !\n");
@@ -162,10 +114,10 @@ void run_benchmark_high_precision() {
         }
 
         // Test Fisher-Yates
-        double fy_time = test_algorithm_performance_high_precision(FY, test_array, n, iter);
+        double fy_time = test_in_high_precision(FY, test_array, n, iter);
 
         // Test Rao-Sandelius
-        double rs_time = test_algorithm_performance_high_precision(RS, test_array, n, iter);
+        double rs_time = test_in_high_precision(RS, test_array, n, iter);
 
         double ratio = rs_time/fy_time;
 
@@ -200,8 +152,8 @@ void run_benchmark_small_array() {
             test_array[j] = j;
         }
 
-        double fy_time = test_algorithm_performance_high_precision(FY, test_array, n, iterations);
-        double rs_time = test_algorithm_performance_high_precision(RS, test_array, n, iterations);
+        double fy_time = test_in_high_precision(FY, test_array, n, iterations);
+        double rs_time = test_in_high_precision(RS, test_array, n, iterations);
 
         double ratio = rs_time/fy_time;
 
