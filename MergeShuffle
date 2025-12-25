@@ -1,0 +1,177 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <stdbool.h>
+#include <time.h>
+
+// For shuffle each block in parallel
+typedef struct {
+    int* array;      // A pointer pointing to the starting position of an array
+    int  start;      // The starting index of the block within the array
+    int  end;        // The end index of the block within the array
+} ShuffleTask;
+
+// For stratified random pooling
+typedef struct {
+    int* src_left;   // The startung pointer of left block
+    int* src_right;  // The startung pointer of right block
+    int* dest;       // The pointer of target loction
+    int  left_len;   // The length of left block
+    int  right_len;  // The length of right block
+} MergeTask;
+
+void parallel_merge_shuffle(int* array, int n, int num_threads);
+void* shuffle_worker(void* arg);
+void fisher_yates_shuffle(int* arr, int len);
+void parallel_random_merge(MergeTask* task);
+int generate_random_bit();
+
+// Main function
+void parallel_merge_shuffle(int* array, int n, int num_threads) {
+    // Calculate the initial block size
+    int min_chunk_size = 256; // Ensure each block has at least 256 positions
+    int num_chunks = (n+min_chunk_size-1)/min_chunk_size;
+    int chunk_size = n/num_chunks;
+
+    // 1. Shuffle each block in parallel
+    pthread_t* threads = malloc(num_threads * sizeof(pthread_t));
+    for (int t = 0; t < num_threads; t++) {
+        int start_chunk = t*(num_chunks/num_threads);
+        int end_chunk = (t == num_threads-1) ? num_chunks : (t+1) * (num_chunks / num_threads);
+
+        ShuffleTask task = {
+            .array = array,
+            .start = start_chunk * chunk_size,
+            .end = (end_chunk == num_chunks) ? n : end_chunk * chunk_size
+        };
+        pthread_create(&threads[t], NULL, shuffle_worker, &task);
+    }
+
+    // Waiting for all blocks to be shuffled
+    for (int t = 0; t < num_threads; t++) {
+        pthread_join(threads[t], NULL);
+    }
+
+    // 2. Stratified Parallel Random Merge
+    int current_size = chunk_size;
+    int* temp_array = malloc(n * sizeof(int));
+
+    while (current_size < n) {
+        // Adjacent blocks are paired two by two
+        for (int i = 0; i < n; i += 2 * current_size) {
+            int left_len = current_size;
+            int right_len = (i + current_size * 2 <= n) ? current_size : n - (i + current_size);
+
+            if (right_len <= 0) {
+                // If there is no elements in right block to merge, copy the remaining portion directly.
+                for (int j = 0; j < left_len; j++) {
+                    temp_array[i + j] = array[i + j];
+                }
+                continue;
+            }
+
+            // Create a merge task
+            MergeTask merge_task = {
+                .src_left = &array[i],
+                .src_right = &array[i + current_size],
+                .dest = &temp_array[i],
+                .left_len = left_len,
+                .right_len = right_len
+            };
+
+            // Perform random merging
+            parallel_random_merge(&merge_task);
+        }
+
+        // Swap array pointers, prepare for the next round of merging
+        int* swap_temp = array;
+        array = temp_array;
+        temp_array = swap_temp;
+
+        current_size *= 2;
+    }
+
+    free(temp_array);
+    free(threads);
+}
+
+// Responsible for scrambling a designated block
+void* shuffle_worker(void* arg) {
+    ShuffleTask* task = (ShuffleTask*)arg;
+    int chunk_len = task->end - task->start;
+
+    // Copy block data to thread-local buffers
+    int* local_buffer = malloc(chunk_len * sizeof(int));
+    for (int i = 0; i < chunk_len; i++) {
+        local_buffer[i] = task->array[task->start + i];
+    }
+
+    // Use Fisher-Yates
+    fisher_yates_shuffle(local_buffer, chunk_len);
+
+    // Put the result back to the corresponding position in the global array
+    for (int i = 0; i < chunk_len; i++) {
+        task->array[task->start + i] = local_buffer[i];
+    }
+
+    free(local_buffer);
+    return NULL;
+}
+
+// Fisher-Yates
+void fisher_yates_shuffle(int* arr, int len) {
+    for (int i = len -1; i > 0; i--) {
+        int j = rand() % (i + 1);
+        int temp = arr[i];
+        arr[i] = arr[j];
+        arr[j] = temp;
+    }
+}
+
+// Random Merge Function
+void parallel_random_merge(MergeTask* task) {
+    int i = 0, j = 0, k = 0;
+
+    // When both blocks still contain elements
+    while (i < task->left_len && j < task->right_len) {
+        // Generate a random bit to determine from which block to retrieve the element.
+        if (generate_random_bit() == 0) {
+            task->dest[k++] = task->src_left[i++]; // 0: left block
+        } else {
+            task->dest[k++] = task->src_right[j++]; // 1: right block
+        }
+    }
+
+    // Copy the remaining elements to the target array
+    while (i < task->left_len) task->dest[k++] = task->src_left[i++];
+    while (j < task->right_len) task->dest[k++] = task->src_right[j++];
+}
+
+// Generate random bit
+int generate_random_bit() {
+    return rand() & 1;
+}
+
+int main() {
+    srand(time(NULL));
+
+    // The test array
+    int n = 100;
+    int* array = malloc(n * sizeof(int));
+    for (int i = 0; i < n; i++) {
+        array[i] = i;
+    }
+
+    int num_threads = 4; // 4 threads
+    parallel_merge_shuffle(array, n, num_threads);
+
+    // Show the final permutation
+    printf("The array after shuffle: ");
+    for (int i = 0; i < n; i++) {
+        printf("%d ", array[i]);
+    }
+    printf("\n");
+
+    free(array);
+    return 0;
+}
