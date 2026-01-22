@@ -1,0 +1,351 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <stdint.h>
+#include <string.h>
+#include <time.h>
+
+// ==================== PCG random number generator ====================
+// PCG32 structure
+typedef struct {
+    uint64_t state;
+    uint64_t inc;
+} pcg32_random_t;
+
+// PCG32 function
+uint32_t pcg32_random_r(pcg32_random_t* rng) {
+    uint64_t oldstate = rng->state;
+    rng->state = oldstate*6364136223846793005ULL+rng->inc;
+    uint32_t xorshifted = ((oldstate>>18u)^oldstate)>>27u;
+    uint32_t rot = oldstate>>59u;
+    return (xorshifted>>rot)|(xorshifted<<((-rot)&31));
+}
+
+void pcg32_srandom_r(pcg32_random_t* rng, uint64_t seed, uint64_t stream) {
+    rng->state = 0U;
+    rng->inc = (stream<<1u)|1u;
+    pcg32_random_r(rng);
+    rng->state += seed;
+    pcg32_random_r(rng);
+}
+
+// Array structure
+typedef struct {
+    uint32_t* data; // The random bit for each element
+    int size; // The size of the array
+} random_array_t;
+
+// Thread Data Structure
+typedef struct {
+    int thread_id; // The id of the thread
+    random_array_t array; // Array structure
+    int generate_size; // The size of array
+} thread_data_t;
+
+// Generate random bit 0 or 1
+uint32_t generate_random_bit(pcg32_random_t* rng) {
+    uint32_t random_num = pcg32_random_r(rng);
+    return random_num & 1;
+}
+
+// Give the random bit from the first one to the bound one.
+uint32_t pcg32_boundedrand_r(pcg32_random_t* rng, uint32_t bound) {
+    uint32_t threshold = -bound % bound;
+    uint32_t r;
+    do {
+        r = pcg32_random_r(rng);
+    } while (r < threshold);
+    return r % bound;
+}
+
+// ==================== MergeShuffle Structure ====================
+typedef struct {
+    int* array; // The pointer of array
+    int start; // Where to start the process
+    int end; // Where to end
+    int thread_id; // Thread ID used for PCG RNG
+    int* output; // The output position
+    int stage; // Stage can be 0 or 1: 0 means the shuffle task while 1 means the merge task
+    union {
+        struct { // The structure for shuffling
+            int chunk_size; // The size of chunk
+        } shuffle;
+        struct { // The structure for merging
+            int* src_left; // Where is the left chunk
+            int* src_right; // Where is the right chunk
+            int left_len; // The length of left chunk
+            int right_len; // The length of right chunk
+        } merge;
+    } task_data;
+} shuffle_task_t;
+
+// ==================== Thread function ====================
+
+// Thread Local Storage
+static __thread pcg32_random_t thread_rng;
+
+// Initialisation PCG for threads
+void init_thread_rng(int thread_id) {
+    // Choose the seed according to the time and thread ID
+    uint64_t seed = (uint64_t)time(NULL)^((uint64_t)getpid() << 16)^(thread_id);
+    uint64_t stream = 12345u+thread_id*6789u; // Make sure that streams are different
+    pcg32_srandom_r(&thread_rng, seed, stream);
+}
+
+// Fisher-Yates using PCG
+void fisher_yates(int* arr, int len) {
+    for (int i = len-1; i > 0; i--) {
+        uint32_t j = pcg32_boundedrand_r(&thread_rng, i+1); // Select other element by PCG
+        // Swap
+        int temp = arr[i];
+        arr[i] = arr[j];
+        arr[j] = temp;
+    }
+}
+
+// Randomly merge two arrays
+void random_merge(shuffle_task_t* task) {
+    int* src_left = task->task_data.merge.src_left; // Only read the left array
+    int* src_right = task->task_data.merge.src_right; // Only read the right array
+    int* dest = task->output+task->start; // The pointer for the output to the target storage location
+
+    int i = 0; // The current position within the left array src_left
+    int j = 0; // The current position within the right array src_left
+    int k = 0; // The current position within the output
+    int left_len = task->task_data.merge.left_len; // The length of the left array
+    int right_len = task->task_data.merge.right_len; // The right of the right array
+
+    while (i < left_len && j < right_len) {
+        // Determine which array to retrieve elements from based on the random bit
+        if (generate_random_bit(&thread_rng) == 0) { // 0 represents the left array
+            dest[k++] = src_left[i++];
+        } else {
+            dest[k++] = src_right[j++]; // 1 represents the right array
+        }
+    }
+
+    // Copy the remaining elements to the output
+    while (i < left_len) dest[k++] = src_left[i++];
+    while (j < right_len) dest[k++] = src_right[j++];
+}
+
+// Thread work function
+void* shuffle_worker(void* arg) {
+    shuffle_task_t* task = (shuffle_task_t*)arg;
+
+    // Initialise the PCG for this thread
+    init_thread_rng(task->thread_id);
+
+    if (task->stage == 0) {
+        // Shuffle task
+        int chunk_len = task->end-task->start;
+
+        // Using local buffers to avoid conflicts
+        int* local_buffer = (int*)malloc(chunk_len * sizeof(int));
+        if (!local_buffer) {
+            fprintf(stderr, "Thread %d: Memory allocation failed\n", task->thread_id);
+            return NULL;
+        }
+
+        // Copy data from the global array
+        memcpy(local_buffer, task->array + task->start, chunk_len * sizeof(int));
+
+        // Shuffle by fisher yates in the local buffer
+        fisher_yates(local_buffer, chunk_len);
+
+        // Write back the result
+        memcpy(task->output + task->start, local_buffer, chunk_len * sizeof(int));
+
+        free(local_buffer);
+
+        printf("Thread %d: Shuffled chunk [%d, %d)\n", task->thread_id, task->start, task->end);
+    }
+    else {
+        // Merge the chunk
+        random_merge(task);
+
+        printf("Thread %d: Merged segments at position %d\n", task->thread_id, task->start);
+    }
+
+    return NULL;
+}
+
+// ==================== MergeShuffle主函数 ====================
+
+void parallel_merge_shuffle(int* array, int array_size, int num_threads) {
+    printf("=== Starting MergeShuffle ===\n");
+    printf("Array size: %d, Threads: %d\n\n", array_size, num_threads);
+
+    // 1. Calculate the size of chunks
+    int chunk_size = 256; // Ensure the base size is 256
+    if (chunk_size > array_size/2) chunk_size = array_size/2;
+    int num_chunks = (array_size+chunk_size-1)/chunk_size; // The number of chunks
+
+    printf("Chunk size: %d, Number of chunks: %d\n", chunk_size, num_chunks);
+
+    // 2. Allocate a temporary array
+    int* temp_array = (int*)malloc(array_size * sizeof(int));
+    if (!temp_array) {
+        fprintf(stderr, "Failed to allocate temp array\n");
+        return;
+    }
+
+    // 3. The first stage: Shuffle each block in parallel
+    printf("\n--- Phase 1: Parallel Shuffling ---\n");
+
+    pthread_t* threads = (pthread_t*)malloc(num_threads * sizeof(pthread_t));
+    shuffle_task_t* tasks = (shuffle_task_t*)malloc(num_chunks * sizeof(shuffle_task_t));
+
+    // Create a shuffle task
+    int chunk_index = 0;
+    for (int i = 0; i < array_size; i += chunk_size) {
+        int end = i+chunk_size;
+        if (end > array_size) end = array_size;
+
+        tasks[chunk_index] = (shuffle_task_t){ // As an index for the 'tasks' array
+            .array = array,
+            .start = i,
+            .end = end,
+            .thread_id = chunk_index % num_threads, // Assign tasks to threads
+            .output = array, // Output the outcome to the original array
+            .stage = 0,
+            .task_data.shuffle.chunk_size = end-i
+        };
+        chunk_index++;
+    }
+
+    // Create and run threads
+    int active_threads = 0;
+    for (int i = 0; i < num_chunks && active_threads < num_threads; i++) {
+        if (pthread_create(&threads[active_threads], NULL, shuffle_worker, &tasks[i]) != 0) {
+            fprintf(stderr, "Failed to create thread\n");
+            continue;
+        }
+        active_threads++;
+
+        // Limit the number of threads
+        if (active_threads >= num_threads) {
+            for (int j = 0; j < active_threads; j++) {
+                pthread_join(threads[j], NULL);
+            }
+            active_threads = 0;
+        }
+    }
+
+    // Waiting for remaining threads
+    for (int i = 0; i < active_threads; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    printf("Phase 1 completed\n");
+
+    // 4. The second stage: Layered Merge
+    printf("\n--- Phase 2: Hierarchical Merging ---\n");
+
+    int* src = array;
+    int* dst = temp_array;
+    int merge_size = chunk_size; // The size of each input block in the current layer
+    int level = 1;
+
+    while (merge_size < array_size) {
+        printf("Merge level %d: block size = %d\n", level, merge_size);
+
+        int task_count = 0;
+        for (int i = 0; i < array_size; i += 2 * merge_size) {
+            // The size of left array
+            int left_len = merge_size; // Default size
+            if (i+left_len > array_size) { // Actual size
+                left_len = array_size-i;
+            }
+
+            // The size of right array
+            int right_len = 0;
+            if (i+merge_size < array_size) {
+                right_len = merge_size; // Default size
+                if (i+merge_size+right_len > array_size) {
+                    right_len = array_size-(i+merge_size); // Actual size
+                }
+            }
+
+            if (right_len > 0) {
+                // Create a merge task
+                shuffle_task_t merge_task = {
+                    .start = i, // The starting position for storing the outcomes
+                    .end = i+left_len+right_len, // The ending position for storing the results
+                    .thread_id = task_count % num_threads,
+                    .output = dst, // Store the outcome in 'dst' array
+                    .stage = 1, // Start the merge task
+                    .task_data.merge = {
+                        .src_left = src+i, // The left array
+                        .src_right = src+i+merge_size, // The right array
+                        .left_len = left_len, // The length of left array
+                        .right_len = right_len // The length of right array
+                    }
+                };
+
+                // Execute the merge
+                init_thread_rng(merge_task.thread_id);
+                random_merge(&merge_task);
+                task_count++;
+            } else {
+                // If there is no right block, copy directly
+                memcpy(dst+i, src+i, left_len*sizeof(int));
+            }
+        }
+
+        // Exchange source and target
+        int* temp = src;
+        src = dst;
+        dst = temp;
+
+        merge_size *= 2;
+        level++;
+    }
+
+    // If the final result is in 'temp_array', copy it back to the original array.
+    if (src == temp_array) {
+        memcpy(array, temp_array, array_size*sizeof(int));
+    }
+
+    // Release the memory
+    free(temp_array);
+    free(threads);
+    free(tasks);
+
+    printf("\n=== MergeShuffle Completed ===\n");
+}
+
+// Print the array
+void print_array_preview(int* array, int n, const char* label) {
+    printf("%s: [", label);
+    for (int i = 0; i < n; i++) {
+        printf("%d", array[i]);
+        if (i < n-1) printf(", ");
+    }
+    printf("]\n");
+}
+
+int main() {
+    // Test
+    int array_size = 100;
+    int num_threads = 2;
+
+    int* array = (int*)malloc(array_size*sizeof(int));
+    for (int i = 0; i < array_size; i++) {
+        array[i] = i;  // [0, 1, 2, ..., n-1]
+    }
+
+    // Print the original array
+    print_array_preview(array, array_size, "Original array");
+
+    // MergeShuffle
+    parallel_merge_shuffle(array, array_size, num_threads);
+
+    // Print the permutation
+    print_array_preview(array, array_size, "Shuffled array");
+
+    // Release the memory
+    free(array);
+
+    return 0;
+}
