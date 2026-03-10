@@ -1,0 +1,166 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <math.h>
+
+//-------------------Random bits generator-----------------
+typedef struct {
+    unsigned int buffer; // Store the raw random bits generated from the system's random number generator
+    int bits_remaining; // Number of unused bits remaining in the buffer
+    long long bits_used; // Total random bits consumed
+} RNG;
+
+// Initialisation
+void init_rng(RNG *rng) {
+    rng->buffer = 0;
+    rng->bits_remaining = 0;
+    rng->bits_used = 0;
+}
+
+// Generate 1 bit
+int get_bit(RNG *rng) {
+    if (rng->bits_remaining == 0) { // If all the random bits are used
+        rng->buffer = rand(); // Generate 32 random bits
+        rng->bits_remaining = 31; // Remain 31 random bits unused
+    }
+
+    int bit = rng->buffer & 1; // Use a random bit from buffer
+    rng->buffer >>= 1; // Remove the used random bit by shifting the buffer one position to the right
+    rng->bits_remaining--; // The number of remaining random bits -1
+    rng->bits_used++; // The number of used random bits +1
+
+    return bit;
+}
+
+// Generate k bits
+unsigned int get_bits(RNG *rng, int k) {
+    unsigned int result = 0;
+    for (int i = 0; i < k; i++) {
+        result = (result << 1) | get_bit(rng); // Store bit sequences
+    }
+    return result;
+}
+
+// Rejection Sampling method used for the random bits generator of FY
+int random_rejection(RNG *rng, int n) {
+    if (n <= 1) return 0; // Check the array
+
+    // How many random bits do we need
+    int bits_needed = 0;
+    int max_val = 1;
+    while (max_val < n) {
+        max_val <<= 1;
+        bits_needed++;
+    }
+
+    // Generate the random bits for each element in the array
+    int result;
+    do {
+        result = get_bits(rng, bits_needed);
+    } while (result >= n); // Continue generating the random bits until every element has a random bit
+
+    return result;
+}
+
+// Fisher-Yates Shuffle
+void FY(int arr[], int n, RNG *rng) {
+    for (int i = n-1; i > 0; i--) {
+        int j = random_rejection(rng, i+1);
+        int temp = arr[i];
+        arr[i] = arr[j];
+        arr[j] = temp;
+    }
+}
+
+// Calculate the ideal value (the lower bound)
+double calculate_ideal(int n) {
+    double ideal = 0;
+    for (int i = n-1; i > 0; i--) {
+        ideal += log2(i + 1);
+    }
+    return ideal;
+}
+
+// Calculate the theoretical expectations (Standard Rejection Sampling)
+double calculate_expected(int n) {
+    double expected = 0;
+
+    // Use the formula in the thesis
+    for (int i = n-1; i > 0; i--) {
+        int range = i+1;
+        int bits_needed = (int)ceil(log2(range));
+        int max_val = 1 << bits_needed;
+
+        if (max_val == range) {
+            expected += bits_needed;
+        }
+        else {
+            double p_accept = (double)range/max_val;
+            expected += bits_needed/p_accept;
+        }
+    }
+
+    return expected;
+}
+
+// Run the FY algorithm to obtain the actual values
+double fy_experiment(int n, int num_trials) {
+    long long total_bits = 0;
+
+    for (int trial = 0; trial < num_trials; trial++) {
+        RNG rng;
+        init_rng(&rng);
+
+        // Create and initialise an array
+        int *arr = (int*)malloc(n * sizeof(int));
+        for (int i = 0; i < n; i++) {
+            arr[i] = i;
+        }
+
+        // Run FY
+        FY(arr, n, &rng);
+
+        // Calculate the number of total ramdom bits
+        total_bits += rng.bits_used;
+
+        free(arr);
+    }
+
+    // Calculate the mean
+    return (double)total_bits / num_trials;
+}
+
+// Compare the data with different n
+void compare_n(int sample[], int count, int num_trials) {
+    printf("%-8s %-12s %-12s %-12s %-12s %-12s\n",
+           "n", "Ideal", "Expected", "Real", "Error", "Ratio of Error(%)");
+
+    for (int i = 0; i < count; i++) {
+        int n = sample[i];
+        double ideal = calculate_ideal(n);
+
+        double expected = calculate_expected(n);
+
+        double actual = fy_experiment(n, num_trials);
+
+        double error = actual-expected;
+
+        double error_r = (error/expected) * 100;
+
+        printf("%-8d %-12.2f %-12.2f %-12.2f %-12.2f %-12.4f\n",
+               n, ideal, expected, actual, error, error_r);
+    }
+}
+
+// The main function
+int main() {
+    srand(time(NULL));
+
+    int sample[] = {100, 1000, 10000, 50000}; // The number of elements
+    int sample_count = sizeof(sample) / sizeof(sample[0]);
+    int num_trials = 100000;  // The test
+
+    compare_n(sample, sample_count, num_trials);
+
+    return 0;
+}
