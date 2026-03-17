@@ -1,0 +1,133 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <time.h>
+
+// Connect the elements with keys
+typedef struct {
+    double key;
+    int element;
+} Decorate;
+
+Decorate *decorate = NULL; // Total N elements
+int N; // The number of the elements in the array
+double e;
+double T;
+int thread_count; // The number of the thread
+
+// Thread parameter
+typedef struct {
+    int start; // Where to start
+    int end; // Where to end
+    unsigned int seed; // Thread-independent random seed
+} ThreadArg;
+
+#define MY_RAND_MAX 0x7fffffff
+
+int thread_seed(unsigned int *seed) {
+    *seed = *seed * 1103515245+12345;
+    return (*seed >> 16) & MY_RAND_MAX;  // Generate a 16-bit number for the thread
+}
+
+// Generate the key for each element
+void* generate_keys(void* arg) {
+    ThreadArg* targ = (ThreadArg*)arg;
+    int start = targ->start;
+    int end = targ->end;
+    unsigned int seed = targ->seed;  // Copy the torrent to your local device
+
+    // Fill each position in the thread with a random key
+    for (int i = start; i < end; i++) {
+        double u = (double)thread_seed(&seed)/(MY_RAND_MAX+1.0);
+        decorate[i].key = u*T; // Make sure the range of key is [1, T]
+    }
+    return NULL;
+}
+
+// Sort the key by order
+int sort_key(const void* a, const void* b) {
+    double key_a = ((Decorate*)a)->key;
+    double key_b = ((Decorate*)b)->key;
+
+    if (key_a < key_b) {
+        return -1;
+    }
+    if (key_a > key_b) {
+        return 1;
+    }
+
+    return 0;
+}
+
+int main() {
+    N = 10000;
+    e = 1e-6;
+    T = N*N/e;
+    thread_count = 4;
+    printf("N = %d, epsilon = %g, T = %g\n", N, e, T);
+    printf("Use %d threads\n", thread_count);
+
+    // Dynamically allocated arrays
+    decorate = (Decorate*)malloc(N * sizeof(Decorate));
+    if (decorate == NULL) {
+        fprintf(stderr, "Error\n");
+        return 1;
+    }
+
+    // Initialise the array
+    for (int i = 0; i < N; i++) {
+        decorate[i].element = i;
+    }
+
+    // Prepare thread function
+    pthread_t *threads = malloc(thread_count * sizeof(pthread_t));
+    ThreadArg *args = malloc(thread_count * sizeof(ThreadArg));
+    if (threads == NULL || args == NULL) {
+        fprintf(stderr, "Error\n");
+        free(decorate);
+        free(threads);
+        free(args);
+        return 1;
+    }
+
+    // Distribute the data among the threads
+    int chunk = N/thread_count; // The size of the chunk
+    int remainder = N%thread_count; // How many element remains after partitioning
+    int start = 0; // The start position is the first element
+    for (int i = 0; i < thread_count; i++) {
+        int end = start+chunk+(i < remainder ? 1 : 0); // Each chunk's ending position
+        args[i].start = start;
+        args[i].end = end;
+        // Different threads use different seeds
+        args[i].seed = (unsigned int)time(NULL) + i;
+
+        if (pthread_create(&threads[i], NULL, generate_keys, &args[i]) != 0) {
+            perror("pthread_create");
+            free(decorate);
+            free(threads);
+            free(args);
+            return 1;
+        }
+        start = end;
+    }
+
+    // Wait for all threads to finish
+    for (int i = 0; i < thread_count; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    // Sort the elements by keys' order
+    qsort(decorate, N, sizeof(Decorate), sort_key);
+
+    // Print a small number of results to verify the random order
+    int show_count = (N < 10) ? N : 10;
+    printf("\nThe top %d elements after sorting:\n", show_count);
+    for (int i = 0; i < show_count; i++) {
+        printf("%d ", decorate[i].element);
+    }
+
+    free(decorate);
+    free(threads);
+    free(args);
+    return 0;
+}
