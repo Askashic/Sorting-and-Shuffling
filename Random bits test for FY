@@ -76,31 +76,9 @@ void FY(int arr[], int n, RNG *rng) {
 double calculate_ideal(int n) {
     double ideal = 0;
     for (int i = n-1; i > 0; i--) {
-        ideal += log2(i + 1);
+        ideal += log2(i+1);
     }
     return ideal;
-}
-
-// Calculate the theoretical expectations (Standard Rejection Sampling)
-double calculate_expected(int n) {
-    double expected = 0;
-
-    // Use the formula in the thesis
-    for (int i = n-1; i > 0; i--) {
-        int range = i+1;
-        int bits_needed = (int)ceil(log2(range));
-        int max_val = 1 << bits_needed;
-
-        if (max_val == range) {
-            expected += bits_needed;
-        }
-        else {
-            double p_accept = (double)range/max_val;
-            expected += bits_needed/p_accept;
-        }
-    }
-
-    return expected;
 }
 
 // Run the FY algorithm to obtain the actual values
@@ -132,23 +110,19 @@ double fy_experiment(int n, int num_trials) {
 
 // Compare the data with different n
 void compare_n(int sample[], int count, int num_trials) {
-    printf("%-8s %-12s %-12s %-12s %-12s %-12s\n",
-           "n", "Ideal", "Expected", "Real", "Error", "Ratio of Error(%)");
+    printf("%-8s %-12s %-12s %-12s %-12s\n", "n", "Ideal", "Real", "Error", "Ratio of Error(%)");
 
     for (int i = 0; i < count; i++) {
         int n = sample[i];
         double ideal = calculate_ideal(n);
 
-        double expected = calculate_expected(n);
-
         double actual = fy_experiment(n, num_trials);
 
-        double error = actual-expected;
+        double error = actual-ideal;
 
-        double error_r = (error/expected) * 100;
+        double error_r = (error/ideal)*100;
 
-        printf("%-8d %-12.2f %-12.2f %-12.2f %-12.2f %-12.4f\n",
-               n, ideal, expected, actual, error, error_r);
+        printf("%-8d %-12.2f %-12.2f %-12.2f %-12.4f\n", n, ideal, actual, error, error_r);
     }
 }
 
@@ -156,8 +130,8 @@ void compare_n(int sample[], int count, int num_trials) {
 int main() {
     srand(time(NULL));
 
-    int sample[] = {100, 1000, 10000, 50000}; // The number of elements
-    int sample_count = sizeof(sample) / sizeof(sample[0]);
+    int sample[] = {100, 1000, 10000, 20000}; // The number of elements
+    int sample_count = sizeof(sample)/sizeof(sample[0]);
     int num_trials = 100000;  // The test
 
     compare_n(sample, sample_count, num_trials);
