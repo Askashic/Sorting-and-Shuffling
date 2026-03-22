@@ -170,7 +170,7 @@ void* shuffle_worker(void* arg) {
     return NULL;
 }
 
-// ==================== MergeShuffle主函数 ====================
+// ==================== MergeShuffle main function ====================
 
 void parallel_merge_shuffle(int* array, int array_size, int num_threads) {
     printf("=== Starting MergeShuffle ===\n");
